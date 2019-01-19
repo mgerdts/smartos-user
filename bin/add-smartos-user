@@ -1,0 +1,141 @@
+#! /bin/ksh93
+
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2019, Joyent, Inc.
+
+# WARNING:
+#	On standalone SmartOS, there if the service that calls this script has
+#	multiple instances, multiple user creations may happen simultaneously.
+#	There are a couple places where there are races that are best prevented
+#	by having the instances depend on each other in such a way that they are
+#	executed sequentially.  See RACE comments below.
+. /lib/svc/share/smf_include.sh
+
+PATH=/usr/sbin:/usr/bin
+PS4='$LINENO+ '
+set -o xtrace
+
+newuser=$1
+
+if [[ -z "$newuser" ]]; then
+	print -u2 "$0: Usage: $0 username"
+	exit $SMF_EXIT_ERR_CONFIG
+fi
+
+if [[ -n $(/bin/bootparams | grep '^smartos=true') ]]; then
+	smartos=true
+else
+	smartos=false
+fi
+
+# Using read rather than assignments to deal with svcprop's escaping of
+# values being explicitly hostile to the obvious form and compabitble with
+# what is implemented below.
+svcprop -p passwd/uid "$SMF_FMRI" 2>/dev/null | read uid
+svcprop -p passwd/gid "$SMF_FMRI" 2>/dev/null | read gid
+svcprop -p passwd/comment "$SMF_FMRI" 2>/dev/null | read comment
+svcprop -p passwd/dir "$SMF_FMRI" 2>/dev/null | read dir
+svcprop -p passwd/shell "$SMF_FMRI" 2>/dev/null | read shell
+svcprop -p shadow/pass "$SMF_FMRI" 2>/dev/null | read pass
+
+if getent passwd "$newuser" >/dev/null 2>&1; then
+	print -u2 "$0: User '$newuser' already exists"
+	exit $SMF_EXIT_OK
+fi
+
+if [[ -z $uid && -n $dir && -d $dir ]]; then
+	# Preserve the uid already in use
+	uid=$(stat -c %u "$dir")
+fi
+
+# For shadow(4) updates.
+today=$(( $(date +%s) / (24 * 60 * 60) ))
+
+# Update /etc/passwd.  If standalone smartos, /etc/shadow is lofs mounted and is
+# breaks commands like useradd(1M).  When shadow is not lofs mounted, we can
+# and should use useradd.
+if [[ $smartos == true ]]; then
+	if [[ -z $uuid ]]; then
+		# Find a free uid.
+		# RACE: multiple users can end up with same uuid.
+		typeset -A uids
+		getent passwd | while IFS=: read user p uid junk; do
+			uids["$uid"]=user
+		done
+		for ((i=500; i < 1000; i++)); do
+			if [[ -z ${uids[i]} ]]; then
+				uid=$i
+				break
+			fi
+		done
+		if [[ -z $uid ]]; then
+			print -u2 "$0: Could not find a free uid"
+			exit $SMF_EXIT_ERR_CONFIG
+		fi
+	fi
+	[[ -z $gid ]] && gid=10
+	[[ -z $shell ]] && shell=/bin/bash
+
+	# RACE: Multiple invocations should each open with O_APPEND and be
+	# writing a small enough amount of data that it all happens with one
+	# write(2), but that's not guaranteed.
+	echo "$newuser:x:$uid:$gid:$comment:$dir:$shell" >> /etc/passwd ||
+	    exit $SMF_EXIT_ERR_CONFIG
+	getent passwd "$newuser" >/dev/null || exit $SMF_EXIT_ERR_CONFIG
+
+	if [[ -n $dir && ! -d $dir ]]; then
+		mkdir -m 755 "$dir" || exit $SMF_EXIT_ERR_CONFIG
+		chown "$uid:$gid" "$dir" || exit $SMF_EXIT_ERR_CONFIG
+	fi
+
+	# Fix up /etc/shadow
+	if ! grep "^${newuser}:" /etc/shadow; then
+		[[ -z $pass ]] && pass=NP
+		# RACE: Just like when appending to /etc/passwd.
+		echo "$newuser:$pass:$today::::::" >> /etc/shadow ||
+			exit $SMF_EXIT_ERR_CONFIG
+		grep "^${newuser}:" /etc/shadow >/dev/null ||
+			exit $SMF_EXIT_ERR_CONFIG
+	fi
+else
+	set -A cmd useradd
+	[[ -n $uid ]] && cmd+=(-u "$uid")
+	[[ -n $gid ]] && cmd+=(-g "$gid")
+	[[ -n "$comment" ]] && cmd+=(-c "$comment")
+	[[ -n "$dir" ]] && cmd+=(-m -d "$dir")
+	[[ -n "$shell" ]] && cmd+=(-s "$shell")
+	cmd+=("$newuser")
+
+	# RACE: One useradd my stumble on the lock of another and fail.
+	"${cmd[@]}" || exit $SMF_EXIT_ERR_CONFIG
+
+	# Useradd adds a user as locked.  Unlock by default so that ssh
+	# key-based authentication can work.
+	if [[ -z $pass ]]; then
+		passwd -u "$newuser" || exit $SMF_EXIT_ERR_CONFIG
+	elif [[ $pass != "*LK*" ]]; then
+		umask 066
+		grep -v "^$newuser:" /etc/shadow > /etc/shadow.$$
+		echo "$newuser:$pass:$today::::::" >> /etc/shadow.$$
+		chmod 400 /etc/shadow.$$
+		wc -l /etc/shadow | read l1 junk
+		wc -l /etc/shadow.$$ | read l2 junk
+		[[ $l1 == $l2 ]] || exit $SMF_EXIT_ERR_CONFIG
+		mv /etc/shadow.$$ /etc/shadow
+	fi
+fi
+
+# Fix up /etc/user_attr
+profiles=
+svcprop -p profiles "$SMF_FMRI" 2>/dev/null | while read prop type prof; do
+	[[ -n $profiles ]] && profiles+=,
+	profiles+="$prof"
+done
+# RACE: One usermod my stumble on the lock of another and fail.
+usermod -P "$profiles" "$newuser" || exit $SMF_EXIT_ERR_CONFIG
+
+
+exit $SMF_EXIT_OK
