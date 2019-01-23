@@ -34,18 +34,23 @@
     </property_group>
 
     <!-- One instance per user -->
-    <instance name="joyent" enabled="true">
+    <instance name="user1" enabled="true">
       <!--
-        This would be better with astring_list but those are only allowed in
-        profiles, not manifests
+        If the user should have any profiles assigned, include the 'profiles'
+        property group.  In the example above, this user will have the 'Primary
+        Administrator' profile, which will allow root access.  See profiles(1).
       -->
       <property_group name="profiles" type="application">
         <propval name="admin" type="astring" value="Primary Administrator" />
       </property_group>
 
       <property_group name="passwd" type="application">
-        <propval name="dir" value="/zones/joyent" type="astring" />
-        <propval name="comment" value="Joyent Engineering" type="astring" />
+        <propval name="dir" value="/zones/user1" type="astring" />
+        <propval name="shell" value="/bin/bash" type="astring" />
+        <!-- Other properties you may wish to configure. See passwd(4). -->
+        <!-- <propval name="uid" value="123" type="integer" /> -->
+        <!-- <propval name="gid" value="123" type="integer" /> -->
+        <!-- <propval name="comment" value="First User" type="astring" /> -->
       </property_group>
 
       <property_group name="shadow" type="application">
@@ -64,13 +69,13 @@
       earlier one because the start method is racy.
     -->
     <!-- Delete this line and the close of the comment 10 lines below to enable.
-    <instance name="jack" enabled="true">
-      <dependency name="joyent" type="service" restart_on="none" grouping="require_all">
-        <service_fmri value="svc:/smartdc/smartos-user:joyent" />
+    <instance name="user2" enabled="true">
+      <dependency name="user1" type="service" restart_on="none" grouping="require_all">
+        <service_fmri value="svc:/smartdc/smartos-user:user1" />
       </dependency>
       <property_group name="passwd" type="application">
-        <propval name="dir" value="/zones/jack" type="astring" />
-        <propval name="comment" value="Mike Gerdts" type="astring" />
+        <propval name="dir" value="/zones/user2" type="astring" />
+        <propval name="comment" value="Second User" type="astring" />
       </property_group>
     </instance>
     -->
