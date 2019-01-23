@@ -65,14 +65,14 @@ they are executed sequentially.  For instance, if I were to add a personal home
 directory after the the one shown above, it may look like this:
 
 ```xml
-    <instance name="mgerdts" enabled="true">
-      <dependency name="joyent" type="service" restart_on="none" grouping="require_all">
-        <service_fmri value="svc:/smartdc/smartos-user:joyent" />
+    <instance name="user2" enabled="true">
+      <dependency name="user1" type="service" restart_on="none" grouping="require_all">
+        <service_fmri value="svc:/smartdc/smartos-user:user1" />
       </dependency>
       <property_group name="passwd" type="application">
-        <propval name="dir" value="/zones/mgerdts" type="astring" />
+        <propval name="dir" value="/zones/user2" type="astring" />
         <propval name="shell" value="/bin/bash" type="astring" />
-        <propval name="comment" value="Mike Gerdts" type="astring" />
+        <propval name="comment" value="Second User" type="astring" />
       </property_group>
     </instance>
 ```
